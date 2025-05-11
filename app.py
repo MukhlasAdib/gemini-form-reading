@@ -37,17 +37,25 @@ class FailedFormRead(Exception):
     pass
 
 
+class GeminiError(Exception):
+    pass
+
+
 def read_form(image: Image.Image) -> dict:
     model = genai.GenerativeModel(MODEL_NAME)
-    response = model.generate_content(
-        [PROMPT, image],
-        safety_settings={
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        },
-    )
+    try:
+        response = model.generate_content(
+            [PROMPT, image],
+            safety_settings={
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            },
+        )
+    except Exception as e:
+        raise GeminiError("Failed to generate content") from e
+
     answer = response.text
     logger.info(f"LLM response: {answer}")
     answer = answer.replace("```json", "").replace("```", "")
@@ -68,19 +76,25 @@ def save_image(image: Image.Image) -> None:
 @app.route("/read-image", methods=["POST"])
 def read_image_form():
     try:
-        image = Image.open(io.BytesIO(request.data))
+        try:
+            image = Image.open(io.BytesIO(request.data))
+        except Exception as e:
+            logger.exception(f"Failed to open image: {e}")
+            return jsonify({"error": "Failed to open image"}), 400
+
+        # save_image(image)
+
+        try:
+            data = read_form(image)
+        except FailedFormRead as e:
+            logger.exception(f"Failed to parse JSON: {e}")
+            return jsonify({"error": str(e)}), 400
+        except GeminiError as e:
+            logger.exception(f"Failed in requesting to Gemini: {e}")
+            return jsonify({"error": str(e)}), 501
     except Exception as e:
-        logger.exception(f"Failed to open image: {e}")
-        return jsonify({"error": "Failed to open image"}), 400
-
-    save_image(image)
-
-    try:
-        data = read_form(image)
-    except FailedFormRead as e:
-        logger.exception(f"Failed to parse JSON: {e}")
-        return jsonify({"error": str(e)}), 400
-
+        logger.exception(f"Unexpected error: {e}")
+        return jsonify({"error": f"An unexpected error occurred {e}"}), 500
     return jsonify(data), 200
 
 
